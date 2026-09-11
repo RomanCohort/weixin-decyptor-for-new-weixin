@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+*.json
+!package.json
+data/
+reports/
+*.db
+all_keys*.json
