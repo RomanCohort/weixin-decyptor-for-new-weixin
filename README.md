@@ -27,6 +27,8 @@
 | 新旧分片密钥缓存刷新 | 📋 已定位 | 设计缺陷，需 upstream 改 `main.py` |
 | codec 偏移静态推导 | ⚠️ 半成品 | 能推出候选偏移，**但未经运行时验证** |
 | 完整密钥提取（Frida） | ❌ 未提供 | 需 Frida spawn + 处理 anti-hook，见下 |
+| 密钥持久化位置 | ✅ **已定位** | `all_users/login/<wxid>/key_info.db`（明文 SQLite），见 [03](docs/03-key-storage.md) |
+| 离线解密 `key_info_data` | ❌ 已排除多条路径 | 包装密钥不落盘，详见 [03](docs/03-key-storage.md) |
 
 ## 快速开始
 
@@ -64,6 +66,7 @@ python tools/find_wechat_codec_offset.py [Weixin.dll 路径]
 
 - [01 — 回归报告](docs/01-regression.md)：内存扫描为何失效，完整证据链
 - [02 — FTS 兜底方案](docs/02-fts-fallback.md)：原理、ID 空间陷阱、用法
+- [03 — 密钥持久化位置与包装结构](docs/03-key-storage.md)：**找到了密钥存哪儿，以及为什么离线解不开**
 
 ## 新机制是什么
 
@@ -110,12 +113,37 @@ salt    = 数据库文件头前 16 字节
 候选函数只有 130 字节、内容是加载魔数字符串后比较，**更像是日志/断言助手**，
 不像接收 password 的配置入口。欢迎验证或修正。
 
+## 密钥到底存在哪儿
+
+已在 4.1.13.65 上定位：
+
+```
+<xwechat_files>/all_users/login/<wxid>/key_info.db     ← 明文 SQLite
+  └─ LoginKeyInfoTable.key_info_data                   ← 180 字节 BLOB
+       └─ 标准 AEAD 包装（BoringSSL：AES-GCM / ChaCha20-Poly1305）
+            └─ 包装密钥：登录时获得，不落盘
+```
+
+**为什么找到位置也解不开**：AES-GCM 是公开标准，任何人都能实现 ——
+**算法的公开性正是其安全性的来源**。缺的不是「实现算法的能力」，
+是那 32 字节的密钥。已排除的路径（全部带 oracle 校验）：
+
+- 180 字节内每个 32 字节窗口当 password → PBKDF2 校验 → 0
+- blob 内的全局 32 字节常量当密钥 → AES-GCM/CBC/CTR、ChaCha20 交叉穷举 → 0
+- 该常量是设备标识（MachineGuid/SID/主机名/用户名）的哈希派生 → 0
+- DPAPI 包装 → 0
+- MMKV / config 文件中的明文密钥 → 0
+
+完整过程与复现方法：[docs/03-key-storage.md](docs/03-key-storage.md)
+
 ## 未做的事 / 需要帮助的地方
 
 1. **Frida 密钥提取**未实现——需要运行时实验，且作者不愿在真实账号上
    承担 anti-hook 检测带来的风险
 2. **4.1.13.65 的正确 hook 点**未确认
-3. 欢迎提交：在你自己环境上验证出的偏移、或更好的静态定位方法
+3. **`key_info.db` 的包装算法**未逆向——相关函数已定位
+   （见 [docs/03](docs/03-key-storage.md) 第六节）
+4. 欢迎提交：在你自己环境上验证出的偏移、包装算法、或更好的静态定位方法
 
 ## 免责声明
 
